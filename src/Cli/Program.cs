@@ -1,34 +1,60 @@
-﻿using Core.Dto;
+﻿using System;
+using Core.Domain;
 using Core.Import;
 
-string path = args.Length > 0 ? args[0] : Path.Combine("data", "sample.csv");
+Console.WriteLine("=== Сценарій 1: успіх ===");
+Product product = Product.Create("P-001", "sku-001", "Цемент М400 25кг", "шт", 100);
+Console.WriteLine(product);
 
-if (!File.Exists(path))
+product.RegisterArrival(50);
+product.Issue(30);
+Console.WriteLine(product);
+
+Console.WriteLine("\n=== Сценарій 2: порушення інваріантів ===");
+TryDo("видача більша за залишок", () => product.Issue(1000));
+TryDo("порожній SKU", () => Product.Create("P-002", "", "Пісок", "т", 10));
+TryDo("від'ємний залишок", () => Product.Create("P-003", "SKU-003", "Цегла", "шт", -5));
+
+static void TryDo(string title, Action action)
 {
-    Console.WriteLine($"Файл не знайдено: {Path.GetFullPath(path)}");
-    return 1;
-}
-
-ImportResult<ProductDto> result = ProductCsvImporter.Load(path);
-
-Console.WriteLine($"Завантажено записів: {result.Items.Count}");
-foreach (ProductDto p in result.Items.Take(5))
-{
-    Console.WriteLine($" {p.Id,-6} {p.Sku,-10} {p.Name,-26} {p.Quantity,5} {p.Unit}");
-}
-
-if (result.Errors.Count > 0)
-{
-    Console.WriteLine($"Пропущено рядків: {result.Errors.Count}");
-    foreach (string e in result.Errors)
+    try
     {
-        Console.WriteLine($" ! {e}");
+        action();
+        Console.WriteLine($" {title}: виняток НЕ спрацював — інваріант відсутній!");
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($" {title}: {ex.GetType().Name} — {ex.Message}");
     }
 }
 
-int total = result.Items.Count + result.Errors.Count;
-double errorPercent = total > 0 ? (double)result.Errors.Count / total * 100 : 0;
+Console.WriteLine("\n=== Додаткове завдання: Зв'язок з імпортом тижня 3 ===");
 
-Console.WriteLine($"\n[Статистика]: Усього: {total} | Прийнято: {result.Items.Count} | Пропущено: {result.Errors.Count} | Помилок: {errorPercent:F1}%");
+// 1. Завантажуємо DTO з файлу (як у 3-й лабі)
+var importResult = ProductCsvImporter.Load(Path.Combine("data", "sample.csv"));
+var validEntities = new List<Product>();
+var domainErrors = new List<string>();
 
-return 0;
+// 2. Пробуємо перетворити кожен DTO на повноцінну доменну сутність
+foreach (var dto in importResult.Items)
+{
+    try
+    {
+        // FromDto викликає Create, де прописані всі наші інваріанти
+        validEntities.Add(Product.FromDto(dto));
+    }
+    catch (Exception ex)
+    {
+        // Якщо DTO мав від'ємну кількість чи пустий SKU - записуємо помилку
+        domainErrors.Add($"SKU {dto.Sku}: {ex.Message}");
+    }
+}
+
+// 3. Виводимо результати
+Console.WriteLine($"Успішно створено доменних сутностей: {validEntities.Count}");
+Console.WriteLine($"Відхилено через порушення інваріантів: {domainErrors.Count}");
+
+foreach (var error in domainErrors)
+{
+    Console.WriteLine($" - {error}");
+}
