@@ -47,21 +47,19 @@ public static class ProductCsvImporter
 
         return parts switch
         {
-            // Патерн властивостей + реляційний патерн
+            // Залишаємо лише перевірку структури файлу (має бути рівно 5 колонок)
             { Length: < 5 } => new ParseFailed($"очікую 5 колонок, отримав {parts.Length}"),
 
-            // Патерн списку + константний патерн + логічний or
-            [_, "", _, _, _] or [_, _, "", _, _] => new ParseFailed("SKU або назва порожні"),
+            // Перевіряємо лише те, що 5-та колонка — це взагалі число (бо DTO вимагає int).
+            // Жодних перевірок на мінуси (q < 0) тут більше немає!
+            [_, _, _, _, var qty] when !int.TryParse(qty, NumberStyles.Integer, CultureInfo.InvariantCulture, out _)
+                => new ParseFailed($"значення '{qty}' не є цілим числом"),
 
-            // Патерн списку + охоронна умова when
-            [_, _, _, _, var qty] when !int.TryParse(qty, NumberStyles.Integer, CultureInfo.InvariantCulture, out int q) || q < 0
-                => new ParseFailed($"кількість '{qty}' не є невід'ємним числом"),
-
-            // Успішний патерн списку з деконструкцією елементів
+            // Якщо колонок 5 і остання це число — тупо створюємо DTO. 
+            // Бізнес-логіку (порожні рядки, мінуси) тепер перевірятиме доменна модель!
             [var id, var sku, var name, var unit, var qty]
                 => new ParseOk(new ProductDto(id, sku, name, unit, int.Parse(qty, CultureInfo.InvariantCulture))),
 
-            // Гілка "усе інше"
             _ => new ParseFailed($"занадто багато колонок: {parts.Length}")
         };
     }
