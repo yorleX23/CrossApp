@@ -49,3 +49,10 @@ dotnet run --project src/Cli
 3. **Неможливо видати більше товару, ніж є на залишку.** 
    - Метод: `Issue`
    - Виняток: `InvalidOperationException`
+
+## Лабораторна робота 5: Сервісний шар
+- **Інтерфейс сховища:** `ICatalogStore`
+- **Реалізації сховища:** `InMemoryCatalogStore` (у пам'яті), `FileCatalogStore` (у файлі JSON)
+- **Сервіс:** `CatalogService`
+- **Запуск у пам'яті:** `dotnet run --project src/Cli`
+- **Запуск із файлом:** `dotnet run --project src/Cli -- --file`
