@@ -1,80 +1,76 @@
 ﻿using System;
 using System.IO;
 using System.Linq;
+using System.Collections.Generic;
 using Core;
 using Core.Abstractions;
 using Core.Services;
 using Core.Storage;
-using Core.Events; // Потрібно для CatalogChangedEventArgs
+using Core.Events;
+using Core.Reports; // Обов'язково для звітів (Lab 7)
+using Core.Domain;  // Обов'язково для Product
 
-// 1. Вибір реалізації (Composition Root)
+// 1. Твоя оригінальна ініціалізація сховища (без змін)
 bool useFile = args.Contains("--file");
 string dataPath = Path.Combine(AppContext.BaseDirectory, "data", "catalog.json");
 
 ICatalogStore store = useFile 
     ? new FileCatalogStore(dataPath) 
-    : new InMemoryCatalogStore(SampleData.Products());
+    : new InMemoryCatalogStore(SampleData.Products()); // Використовуємо твою правильну назву
 
 var service = new CatalogService(store);
-
 Console.WriteLine($"=== Сховище: {store.GetType().Name} ===\n");
 
-// --- КРОК 3 і 4: Налаштування логування та підписки ---
-var logPath = Path.Combine(AppContext.BaseDirectory, "logs", "app.log");
-Directory.CreateDirectory(Path.GetDirectoryName(logPath)!);
+var items = service.All(); // Отримуємо всі товари для звітів
 
-void OnCatalogChanged(object? sender, CatalogChangedEventArgs e)
+// ==========================================
+// Демонстрація відкладеного виконання LINQ
+// ==========================================
+Console.WriteLine("=== Демо відкладеного виконання ===");
+var source = items.ToList();
+var query = source.Where(p => p.Quantity < 10); // Запит створено, але не виконано
+Console.WriteLine($"Дефіцитних до змін: {query.Count()}");
+
+// Додаємо тимчасовий товар прямо в локальний список для перевірки
+source.Add(Product.Create("tmp001", "SKU-999", "Тестовий товар", "шт", 3));
+Console.WriteLine($"Дефіцитних після змін: {query.Count()}"); // Число зміниться, бо LINQ перерахує список
+
+var snapshot = query.ToList(); // Фіксуємо результат
+source.Clear();
+Console.WriteLine($"У знімку лишилось: {snapshot.Count}\n"); 
+// ==========================================
+
+// Обробка команд для звітів
+var command = args.FirstOrDefault(a => !a.StartsWith("--")) ?? "report-top";
+
+switch (command)
 {
-    var line = $"{e.At:HH:mm:ss} {e.Kind,-8} {e.Id} {e.Delta,4:+0;-0} залишок {e.QuantityAfter}";
-    Console.WriteLine(line);
-    File.AppendAllText(logPath, line + Environment.NewLine);
+    case "report-top":
+        Print(ReportService.TopByQuantity(items, 5));
+        break;
+
+    case "report-low":
+        Print(ReportService.LowStock(items, 10));
+        break;
+
+    case "report-groups":
+        foreach (var g in ReportService.ByUnit(items))
+            Console.WriteLine($" {g.Key,-6} позицій: {g.Count,3}  сумарно: {g.TotalQuantity,6}");
+        break;
+
+    case "report-sum":
+        var t = ReportService.Totals(items);
+        Console.WriteLine($"позицій {t.Items}, всього {t.Total}, середнє {t.Average:F2}, макс {t.Max}");
+        break;
+
+    default:
+        Console.WriteLine("Доступні команди: report-top | report-low | report-groups | report-sum");
+        break;
 }
 
-service.Changed += OnCatalogChanged; // Підписка локальним методом
-
-int changes = 0;
-service.Changed += (_, _) => changes++; // Друга підписка через лямбду-лічильник
-// -----------------------------------------------------
-
-// 2. Успішний сценарій (Крок 5)
-try
+// Допоміжний метод для гарного виведення в консоль
+static void Print(IReadOnlyList<StockLine> lines)
 {
-    var created = service.Add("SKU-999", "Новий товар", "шт", 10);
-    service.Receive(created.Id, 5);
-    Console.WriteLine($"\nПодій отримано: {changes}");
-
-    Console.WriteLine("\n--- Перевірка відписки ---");
-    service.Changed -= OnCatalogChanged; // Відписуємось від консолі/файлу
-    service.Receive(created.Id, 2); // Тиха операція: у консоль подія не виведеться
-    Console.WriteLine($"Подій отримано: {changes}"); // Але лямбда працює далі (+1)
-}
-catch (Exception ex)
-{
-    Console.WriteLine($"Помилка: {ex.Message}");
-}
-
-Console.WriteLine("\nПоточний каталог:");
-foreach (var p in service.All())
-{
-    Console.WriteLine($" {p.Id} | {p.Sku,-10} | {p.Name,-15} | {p.Quantity,5} {p.Unit}");
-}
-
-// 3. Сценарій відмови (Крок 6)
-Console.WriteLine("\n=== Сценарій відмови ===");
-try
-{
-    service.Receive("неіснуючий-id", 10);
-}
-catch (Exception ex)
-{
-    Console.WriteLine($"Перехоплено очікувану помилку: {ex.GetType().Name}\n{ex.Message}");
-    Console.WriteLine($"Лічильник подій не змінився: {changes}"); // Подій не було
-}
-
-// 4. Виклик Func замість події (Крок 7)
-Console.WriteLine("\n=== Перевірка Func: Товари, кількість яких < 15 ===");
-var lowStock = service.FindAll(p => p.Quantity < 15);
-foreach (var item in lowStock)
-{
-    Console.WriteLine($"{item.Id} - {item.Name} ({item.Quantity} {item.Unit})");
+    foreach (var l in lines)
+        Console.WriteLine($" {l.Sku,-10} {l.Name,-22} {l.Quantity,6} {l.Unit}");
 }
