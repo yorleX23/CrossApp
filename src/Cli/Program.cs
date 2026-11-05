@@ -2,49 +2,75 @@
 using System.IO;
 using System.Linq;
 using System.Collections.Generic;
+using System.Threading;
+using System.Threading.Tasks;
 using Core;
 using Core.Abstractions;
 using Core.Services;
 using Core.Storage;
 using Core.Events;
-using Core.Reports; // Обов'язково для звітів (Lab 7)
-using Core.Domain;  // Обов'язково для Product
+using Core.Reports;
+using Core.Domain;
 
-// 1. Твоя оригінальна ініціалізація сховища (без змін)
+// Токен скасування та перехоплення натискання Ctrl+C
+using var cts = new CancellationTokenSource();
+Console.CancelKeyPress += (_, e) => 
+{ 
+    e.Cancel = true; 
+    cts.Cancel(); 
+};
+
+// 1. Ініціалізація сховища
 bool useFile = args.Contains("--file");
 string dataPath = Path.Combine(AppContext.BaseDirectory, "data", "catalog.json");
 
 ICatalogStore store = useFile 
     ? new FileCatalogStore(dataPath) 
-    : new InMemoryCatalogStore(SampleData.Products()); // Використовуємо твою правильну назву
+    : new InMemoryCatalogStore(SampleData.Products());
 
 var service = new CatalogService(store);
 Console.WriteLine($"=== Сховище: {store.GetType().Name} ===\n");
 
-var items = service.All(); // Отримуємо всі товари для звітів
-
-// ==========================================
-// Демонстрація відкладеного виконання LINQ
-// ==========================================
-Console.WriteLine("=== Демо відкладеного виконання ===");
-var source = items.ToList();
-var query = source.Where(p => p.Quantity < 10); // Запит створено, але не виконано
-Console.WriteLine($"Дефіцитних до змін: {query.Count()}");
-
-// Додаємо тимчасовий товар прямо в локальний список для перевірки
-source.Add(Product.Create("tmp001", "SKU-999", "Тестовий товар", "шт", 3));
-Console.WriteLine($"Дефіцитних після змін: {query.Count()}"); // Число зміниться, бо LINQ перерахує список
-
-var snapshot = query.ToList(); // Фіксуємо результат
-source.Clear();
-Console.WriteLine($"У знімку лишилось: {snapshot.Count}\n"); 
-// ==========================================
-
-// Обробка команд для звітів
+// Обробка команд із аргументів
 var command = args.FirstOrDefault(a => !a.StartsWith("--")) ?? "report-top";
+
+var items = service.All();
 
 switch (command)
 {
+    case "import":
+        try
+        {
+            using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cts.Token, timeoutCts.Token);
+
+            var importer = new JsonCatalogImporter();
+
+            var progress = new Progress<int>(p => 
+            {
+                Console.Write($"\rПрогрес: {p}%   ");
+            });
+
+            var added = await service.ImportAsync(importer, dataPath, progress, linkedCts.Token);
+            
+            // Чистий відступ, щоб підсумок не налізав на відсотки
+            Console.WriteLine();
+            Console.WriteLine($"Імпортовано записів: {added}");
+        }
+        catch (OperationCanceledException)
+        {
+            Console.WriteLine("\nІмпорт скасовано (через Ctrl+C або тайм-аут).");
+        }
+        catch (DomainException ex)
+        {
+            Console.WriteLine($"\nДані відхилено: {ex.Message}");
+        }
+        catch (FileNotFoundException)
+        {
+            Console.WriteLine($"\nФайл не знайдено: {dataPath}");
+        }
+        break;
+
     case "report-top":
         Print(ReportService.TopByQuantity(items, 5));
         break;
@@ -64,11 +90,10 @@ switch (command)
         break;
 
     default:
-        Console.WriteLine("Доступні команди: report-top | report-low | report-groups | report-sum");
+        Console.WriteLine("Доступні команди: import | report-top | report-low | report-groups | report-sum");
         break;
 }
 
-// Допоміжний метод для гарного виведення в консоль
 static void Print(IReadOnlyList<StockLine> lines)
 {
     foreach (var l in lines)

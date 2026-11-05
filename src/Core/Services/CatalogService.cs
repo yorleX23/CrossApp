@@ -1,9 +1,11 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using Core.Abstractions;
 using Core.Domain;
-using Core.Events; // Додано для видимості CatalogChangedEventArgs та CatalogChangeKind
+using Core.Events;
 
 namespace Core.Services;
 
@@ -12,7 +14,7 @@ public sealed class CatalogService(ICatalogStore store)
     private readonly ICatalogStore _store = store ?? throw new ArgumentNullException(nameof(store));
 
     public IReadOnlyList<Product> All() => _store.List();
-    
+
     public Product? Find(string id) => _store.GetById(id);
 
     public event EventHandler<CatalogChangedEventArgs>? Changed;
@@ -26,6 +28,54 @@ public sealed class CatalogService(ICatalogStore store)
         _store.Add(product);
         OnChanged(product, CatalogChangeKind.Added, quantity);
         return product;
+    }
+
+    // Основний імпорт з підтримкою IProgress (Додаткове 3)
+    public async Task<int> ImportAsync(
+        ICatalogImporter importer, 
+        string path, 
+        IProgress<int>? progress = null, 
+        CancellationToken ct = default)
+    {
+        var items = await importer.LoadAsync(path, progress, ct);
+        var added = 0;
+
+        foreach (var item in items)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            if (_store.GetById(item.Id) is not null)
+                continue;
+
+            _store.Add(item);
+            OnChanged(item, CatalogChangeKind.Added, item.Quantity);
+            added++;
+        }
+
+        return added;
+    }
+
+    // Потоковий імпорт через await foreach (Додаткове 1)
+    public async Task<int> ImportStreamAsync(
+        ICatalogImporter importer, 
+        string path, 
+        CancellationToken ct = default)
+    {
+        var added = 0;
+
+        await foreach (var item in importer.LoadStreamAsync(path, ct))
+        {
+            ct.ThrowIfCancellationRequested();
+
+            if (_store.GetById(item.Id) is not null)
+                continue;
+
+            _store.Add(item);
+            OnChanged(item, CatalogChangeKind.Added, item.Quantity);
+            added++;
+        }
+
+        return added;
     }
 
     public void Receive(string id, int quantity)
